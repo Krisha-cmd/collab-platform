@@ -19,6 +19,7 @@ SETTINGS = Settings(
     reasoning_effort="low",
     port=0,
     max_input_chars=1000,
+    max_summary_chars=1000,
     default_timeout_s=5,
 )
 

@@ -17,6 +17,11 @@ def _text_between_tags(content: str) -> str:
     return match.group(1) if match else content
 
 
+def _first_sentence(text: str) -> str:
+    match = re.search(r".+?[.!?](?=\s|$)", text.strip(), flags=re.DOTALL)
+    return (match.group(0) if match else text.strip())[:200]
+
+
 class FakeProvider(Provider):
     async def complete(self, task, messages, *, json_mode=False, fast=False, timeout=None):
         text = _text_between_tags(messages[-1]["content"])
@@ -38,9 +43,21 @@ class FakeProvider(Provider):
                 )
             return json.dumps({"fixes": fixes})
 
+        if task == "summarize_chunk":
+            return _first_sentence(text)
+
+        if task == "enhance":
+            # "Concise" in the simplest possible way: drop the word "very".
+            return re.sub(r"\bvery ", "", text)
+
         return "(fake answer)"
 
     async def stream(self, task, messages, *, fast=False, timeout=None) -> AsyncIterator[str]:
-        for word in ["and", "then", "we", "shipped", "it."]:
-            await asyncio.sleep(0.05)
-            yield " " + word
+        if task == "summarize":
+            text = _text_between_tags(messages[-1]["content"])
+            words = ("Summary: " + _first_sentence(text)).split(" ")
+        else:
+            words = ["and", "then", "we", "shipped", "it."]
+        for i, word in enumerate(words):
+            await asyncio.sleep(0.02)
+            yield word if (task == "summarize" and i == 0) else " " + word

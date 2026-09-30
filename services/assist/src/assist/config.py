@@ -20,8 +20,8 @@ class Settings:
     reasoning_effort: str | None  # "low" / "medium" / "high", or None to omit
     port: int
     max_input_chars: int  # longest text accepted in one request
+    max_summary_chars: int  # longest document accepted for summarizing
     default_timeout_s: float  # used when the caller sets no gRPC deadline
-
     @staticmethod
     def from_env() -> "Settings":
         model = os.getenv("ASSIST_MODEL", "")
@@ -34,5 +34,6 @@ class Settings:
             reasoning_effort=os.getenv("ASSIST_REASONING_EFFORT") or None,
             port=int(os.getenv("ASSIST_PORT", "50061")),
             max_input_chars=int(os.getenv("ASSIST_MAX_INPUT_CHARS", "8000")),
+            max_summary_chars=int(os.getenv("ASSIST_MAX_SUMMARY_CHARS", "60000")),
             default_timeout_s=float(os.getenv("ASSIST_DEFAULT_TIMEOUT_S", "20")),
         )

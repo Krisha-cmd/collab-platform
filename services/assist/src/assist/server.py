@@ -11,7 +11,9 @@ from .anchoring import utf16_len
 from .config import Settings
 from .providers import Provider, ProviderError, ProviderTimeout, RateLimited, make_provider
 from .tasks.autocomplete import autocomplete
+from .tasks.enhance import InvalidMode, enhance
 from .tasks.grammar import check_grammar
+from .tasks.summarize import summarize
 
 log = logging.getLogger("assist")
 
@@ -21,36 +23,53 @@ class AssistService(assist_pb2_grpc.AssistServiceServicer):
         self._provider = provider
         self._settings = settings
 
-    def _timeout(self, context) -> float:
+    def _timeout(self, context, default: float | None = None) -> float:
         """Time left before the caller's deadline, or the default if none."""
+        default = default or self._settings.default_timeout_s
         remaining = context.time_remaining()
         if remaining is None:
-            return self._settings.default_timeout_s
-        return max(0.1, min(remaining, self._settings.default_timeout_s))
+            return default
+        return max(0.1, min(remaining, default))
 
-    async def _check_size(self, text: str, context) -> None:
-        if utf16_len(text) > self._settings.max_input_chars:
+    async def _check_size(self, text: str, limit: int, context) -> None:
+        if utf16_len(text) > limit:
             await context.abort(
-                grpc.StatusCode.INVALID_ARGUMENT,
-                f"text is longer than {self._settings.max_input_chars} characters",
+                grpc.StatusCode.INVALID_ARGUMENT, f"text is longer than {limit} characters"
             )
 
     async def CheckGrammar(self, request, context):
-        await self._check_size(request.context.text, context)
+        await self._check_size(request.context.text, self._settings.max_input_chars, context)
         try:
             return await check_grammar(self._provider, request.context, self._timeout(context))
         except ProviderError as err:
             await _abort_for(err, context)
 
     async def Autocomplete(self, request, context):
-        await self._check_size(request.context.before, context)
+        await self._check_size(request.context.before, self._settings.max_input_chars, context)
         try:
             async for chunk in autocomplete(self._provider, request, self._timeout(context)):
                 yield chunk
         except ProviderError as err:
             await _abort_for(err, context)
 
-    # Summarize and Enhance come next. Until then gRPC answers UNIMPLEMENTED.
+    async def Summarize(self, request, context):
+        await self._check_size(request.document.text, self._settings.max_summary_chars, context)
+        # Long documents need several model calls, so allow more time by default.
+        timeout = self._timeout(context, default=self._settings.default_timeout_s * 3)
+        try:
+            async for chunk in summarize(self._provider, request, timeout):
+                yield chunk
+        except ProviderError as err:
+            await _abort_for(err, context)
+
+    async def Enhance(self, request, context):
+        await self._check_size(request.context.text, self._settings.max_input_chars, context)
+        try:
+            return await enhance(self._provider, request, self._timeout(context))
+        except InvalidMode as err:
+            await context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(err))
+        except ProviderError as err:
+            await _abort_for(err, context)
 
 
 async def _abort_for(err: ProviderError, context) -> None:
