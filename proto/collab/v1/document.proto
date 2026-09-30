@@ -2,4 +2,73 @@ syntax = "proto3";
 
 package collab.v1;
 
+import "collab/v1/common.proto";
+
 option go_package = "github.com/Krisha-cmd/collab-platform/gen/go/collab/v1;collabv1";
+
+// Stores documents and their ordered history of operations.
+//
+// Conflict rule: an operation is accepted only if its base_revision is the
+// document's current revision. Otherwise the whole request is rejected with
+// status ABORTED, and the client rebases its edits onto the newer revisions
+// (which it receives through Subscribe) and sends them again.
+//
+// In Milestone 2 every node runs this service on top of Raft. The API stays
+// the same; SubmitOperations just returns once a majority has the edit.
+service DocumentService {
+  // Returns a document's current text and revision. A document that has never
+  // been edited exists implicitly: empty, at revision 0.
+  rpc GetSnapshot(GetSnapshotRequest) returns (GetSnapshotResponse);
+
+  // Applies a batch of operations to one document, all or nothing.
+  // Errors: ABORTED if an operation is based on an old revision,
+  // INVALID_ARGUMENT if an operation is malformed.
+  rpc SubmitOperations(SubmitOperationsRequest) returns (SubmitOperationsResponse);
+
+  // Streams every operation committed after from_revision, in order: first
+  // the ones that already happened, then new ones as they are committed.
+  // Includes the subscriber's own operations; clients recognize them by
+  // op_id.client_id. If the stream ends with UNAVAILABLE, subscribe again
+  // from the last revision received.
+  rpc Subscribe(SubscribeRequest) returns (stream SubscribeResponse);
+}
+
+message GetSnapshotRequest {
+  string doc_id = 1;
+}
+
+message GetSnapshotResponse {
+  DocumentSnapshot snapshot = 1;
+}
+
+message SubmitOperationsRequest {
+  string doc_id = 1;
+
+  // Operation i must have base_revision equal to operation i-1's base_revision
+  // plus 1: each one builds on the previous. Every operation's doc_id must
+  // equal the doc_id above.
+  repeated Operation operations = 2;
+}
+
+message SubmitOperationsResponse {
+  // The document's revision after this request.
+  uint64 revision = 1;
+
+  // How many operations were applied now.
+  uint32 applied = 2;
+
+  // How many were skipped because they had already been applied (retries).
+  uint32 duplicates = 3;
+}
+
+message SubscribeRequest {
+  string doc_id = 1;
+  uint64 from_revision = 2;
+}
+
+message SubscribeResponse {
+  // The revision this operation produced. operation.base_revision is always
+  // revision - 1.
+  uint64 revision = 1;
+  Operation operation = 2;
+}

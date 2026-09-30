@@ -1,0 +1,110 @@
+syntax = "proto3";
+
+package collab.v1;
+
+import "collab/v1/assist.proto";
+import "collab/v1/common.proto";
+import "collab/v1/document.proto";
+
+option go_package = "github.com/Krisha-cmd/collab-platform/gen/go/collab/v1;collabv1";
+
+// Messages between the browser and the gateway.
+//
+// The browser opens one WebSocket per open document:
+//   ws://<gateway>/ws?doc=<doc_id>&name=<display name>
+// Every WebSocket message is one ClientMessage (browser -> gateway) or one
+// ServerMessage (gateway -> browser), encoded as JSON using the standard
+// protobuf JSON mapping (field names in lowerCamelCase, 64-bit numbers as
+// strings).
+//
+// Right after connecting, the gateway sends a ServerMessage with `joined`,
+// then streams every committed operation after that snapshot as `operation`
+// messages, and sends `presence` whenever someone joins, leaves or moves.
+
+message ClientMessage {
+  // Chosen by the browser. Replies to this message carry the same value,
+  // so the browser can match them up. Not needed for cursor updates.
+  string request_id = 1;
+
+  oneof kind {
+    SubmitOperationsRequest submit = 2;
+    CursorUpdate cursor = 3;
+    CheckGrammarRequest check_grammar = 4;
+    AutocompleteRequest autocomplete = 5;
+    SummarizeRequest summarize = 6;
+    EnhanceRequest enhance = 7;
+    // Stops a streaming request (autocomplete or summarize) that is still running.
+    CancelRequest cancel = 8;
+  }
+}
+
+message ServerMessage {
+  // The request_id of the ClientMessage this answers; empty for messages the
+  // gateway sends on its own (joined, operation, presence).
+  string request_id = 1;
+
+  oneof kind {
+    JoinedEvent joined = 2;
+    SubmitOperationsResponse submitted = 3;
+    // A committed operation, from anyone (including this browser).
+    SubscribeResponse operation = 4;
+    PresenceEvent presence = 5;
+    CheckGrammarResponse grammar = 6;
+    // Streamed: several arrive for one request, followed by stream_end.
+    AutocompleteResponse autocomplete = 7;
+    // Streamed: several arrive for one request, followed by stream_end.
+    SummarizeResponse summary = 8;
+    EnhanceResponse enhanced = 9;
+    StreamEnd stream_end = 10;
+    ErrorEvent error = 11;
+  }
+}
+
+message JoinedEvent {
+  // Identifies this connection in presence lists.
+  string session_id = 1;
+  // The display name the gateway will use for this session.
+  string name = 2;
+  // The document when the connection opened. Operations after
+  // snapshot.revision follow as `operation` messages.
+  DocumentSnapshot snapshot = 3;
+}
+
+// Where a user's cursor or selection is. anchor == head means a plain cursor.
+message CursorUpdate {
+  // The revision the positions refer to.
+  uint64 revision = 1;
+  uint32 anchor = 2;
+  uint32 head = 3;
+}
+
+message Participant {
+  string session_id = 1;
+  string name = 2;
+  // A CSS colour for this user's cursor and name tag, e.g. "#e8590c".
+  string color = 3;
+  // Not set until the user's first cursor update.
+  CursorUpdate cursor = 4;
+  // When this user last submitted an edit (milliseconds since 1970, gateway
+  // clock). 0 if never. Browsers show "editing" if it was recent.
+  int64 last_edit_unix_ms = 5;
+}
+
+// Everyone currently connected to the document, including the receiver.
+message PresenceEvent {
+  repeated Participant participants = 1;
+}
+
+message CancelRequest {
+  // The request_id of the streaming request to stop.
+  string target_request_id = 1;
+}
+
+message StreamEnd {}
+
+message ErrorEvent {
+  // The gRPC status code name, e.g. "ABORTED" (stale edit: rebase and resend),
+  // "INVALID_ARGUMENT", "UNAVAILABLE", "RESOURCE_EXHAUSTED".
+  string code = 1;
+  string message = 2;
+}
