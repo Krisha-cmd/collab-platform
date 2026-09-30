@@ -1,0 +1,7 @@
+grpcio
+protobuf
+openai>=1.40
+pydantic>=2.7
+python-dotenv>=1.0
+pytest>=8.0
+httpx>=2.0
