@@ -1,0 +1,18 @@
+syntax = "proto3";
+
+package collab.v1;
+
+import "collab/v1/common.proto";   // path is relative to proto/, not to this file
+
+option go_package = "github.com/krisha-cmd/collab-platform/gen/go/collab/v1;collabv1";
+
+service AssistService {
+  rpc CheckGrammar(CheckGrammarRequest) returns (CheckGrammarResponse);
+  rpc Autocomplete(AutocompleteRequest) returns (stream AutocompleteResponse);
+  rpc Summarize(SummarizeRequest) returns (stream SummarizeResponse);
+  rpc Enhance(EnhanceRequest) returns (EnhanceResponse);
+}
+
+message CheckGrammarRequest  { TextContext context = 1; }
+message CheckGrammarResponse { string request_id = 1; int64 base_revision = 2; repeated Edit edits = 3; }
+// ...the other request/response messages
