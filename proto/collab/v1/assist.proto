@@ -2,17 +2,159 @@ syntax = "proto3";
 
 package collab.v1;
 
-import "collab/v1/common.proto";   // path is relative to proto/, not to this file
+import "collab/v1/common.proto";
 
-option go_package = "github.com/krisha-cmd/collab-platform/gen/go/collab/v1;collabv1";
+// Must match the go_package in common.proto.
+option go_package = "github.com/Krisha-cmd/collab-platform/gen/go/collab/v1;collabv1";
 
+// The LLM service. It is stateless and read-only: it never changes a document.
+// It returns suggestions; when a user accepts one, the client sends it as an
+// ordinary Operation through the document service (and so through Raft).
 service AssistService {
+  // Finds grammar and spelling mistakes in a piece of text.
   rpc CheckGrammar(CheckGrammarRequest) returns (CheckGrammarResponse);
+
+  // Suggests how to continue the text at the cursor. Streams the completion
+  // in small pieces so the editor can show it as it arrives.
   rpc Autocomplete(AutocompleteRequest) returns (stream AutocompleteResponse);
+
+  // Summarizes a whole document. Streams the summary as it is written.
   rpc Summarize(SummarizeRequest) returns (stream SummarizeResponse);
+
+  // Rewrites a selected piece of text in a chosen style.
   rpc Enhance(EnhanceRequest) returns (EnhanceResponse);
 }
 
-message CheckGrammarRequest  { TextContext context = 1; }
-message CheckGrammarResponse { string request_id = 1; int64 base_revision = 2; repeated Edit edits = 3; }
-// ...the other request/response messages
+// ---------------------------------------------------------------------------
+// Shared by several requests and responses
+// ---------------------------------------------------------------------------
+
+// The piece of a document a request is about.
+message TextContext {
+  // Chosen by the caller (e.g. a UUID) and echoed back in every response, so
+  // the caller can match responses to requests and drop outdated ones.
+  string request_id = 1;
+
+  // Where `text` sits in the document: doc_id, the revision the caller's copy
+  // is at, and the range `text` covers. All positions are UTF-16 code units
+  // counted from the start of the document (see common.proto).
+  TextAnchor anchor = 2;
+
+  // The text inside anchor.range. This is what gets checked or rewritten.
+  string text = 3;
+
+  // Some text just before and after the range, to give the model context.
+  // It is never changed. Keep it short (a paragraph or so each side).
+  string before = 4;
+  string after = 5;
+}
+
+enum SuggestionKind {
+  SUGGESTION_KIND_UNSPECIFIED = 0;
+  SUGGESTION_KIND_GRAMMAR = 1;
+  SUGGESTION_KIND_SPELLING = 2;
+  SUGGESTION_KIND_PUNCTUATION = 3;
+  SUGGESTION_KIND_STYLE = 4;
+  SUGGESTION_KIND_ENHANCEMENT = 5;
+}
+
+// One proposed change: replace the text at `anchor` with `replacement`.
+message Suggestion {
+  // The exact range to replace, in document positions at anchor.revision.
+  TextAnchor anchor = 1;
+
+  // The text the service expects to find at anchor.range. Before showing the
+  // suggestion, the client checks that the document still contains this text
+  // at the (possibly shifted) range. If not, someone edited it: drop it.
+  string original = 2;
+
+  string replacement = 3;
+
+  // A short human-readable explanation, e.g. "Subject-verb agreement".
+  string reason = 4;
+
+  SuggestionKind kind = 5;
+}
+
+// ---------------------------------------------------------------------------
+// CheckGrammar
+// ---------------------------------------------------------------------------
+
+message CheckGrammarRequest {
+  TextContext context = 1;
+}
+
+message CheckGrammarResponse {
+  string request_id = 1;
+  // Sorted by position; ranges do not overlap. Empty if nothing was found.
+  repeated Suggestion suggestions = 2;
+}
+
+// ---------------------------------------------------------------------------
+// Autocomplete
+// ---------------------------------------------------------------------------
+
+message AutocompleteRequest {
+  // context.anchor.range is the cursor position (start == end), so
+  // context.text is empty. context.before holds the text leading up to it.
+  TextContext context = 1;
+
+  // Upper limit on the completion length. 0 means use the service default.
+  uint32 max_tokens = 2;
+}
+
+// Streamed. Join the `delta` values in order to get the full completion.
+message AutocompleteResponse {
+  string request_id = 1;
+  string delta = 2;
+}
+
+// ---------------------------------------------------------------------------
+// Summarize
+// ---------------------------------------------------------------------------
+
+enum SummaryLength {
+  SUMMARY_LENGTH_UNSPECIFIED = 0;
+  SUMMARY_LENGTH_SHORT = 1; // one or two sentences
+  SUMMARY_LENGTH_MEDIUM = 2; // a short paragraph
+  SUMMARY_LENGTH_DETAILED = 3; // bullet points per section
+}
+
+message SummarizeRequest {
+  string request_id = 1;
+  // The whole document at one revision.
+  DocumentSnapshot document = 2;
+  SummaryLength length = 3;
+}
+
+// Streamed. Join the `delta` values in order to get the full summary.
+message SummarizeResponse {
+  string request_id = 1;
+  // Which revision this summary describes, so the UI can show it is outdated.
+  uint64 revision = 2;
+  string delta = 3;
+}
+
+// ---------------------------------------------------------------------------
+// Enhance
+// ---------------------------------------------------------------------------
+
+enum EnhanceMode {
+  ENHANCE_MODE_UNSPECIFIED = 0;
+  ENHANCE_MODE_CONCISE = 1; // shorter, same meaning
+  ENHANCE_MODE_FORMAL = 2; // more formal tone
+  ENHANCE_MODE_CLARIFY = 3; // easier to understand
+  ENHANCE_MODE_EXPAND = 4; // add detail
+}
+
+message EnhanceRequest {
+  // context.anchor.range is the user's selection; context.text is its content.
+  TextContext context = 1;
+  EnhanceMode mode = 2;
+}
+
+message EnhanceResponse {
+  string request_id = 1;
+  // Usually a single suggestion replacing the whole selection.
+  repeated Suggestion suggestions = 2;
+}

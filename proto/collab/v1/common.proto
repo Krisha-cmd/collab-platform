@@ -1,0 +1,92 @@
+syntax = "proto3";
+
+package collab.v1;
+
+// Replace "yourname/aos-team8" with your Go module path (the "module" line in go.mod).
+option go_package = "github.com/Krisha-cmd/collab-platform/gen/go/collab/v1;collabv1";
+
+// ---------------------------------------------------------------------------
+// Conventions shared by every message in the collab.v1 package
+// ---------------------------------------------------------------------------
+//
+// TEXT POSITIONS
+//   All positions and lengths are counted in UTF-16 code units: the unit that
+//   JavaScript strings and CodeMirror use. Most characters count as 1; emoji
+//   and other characters outside the Basic Multilingual Plane count as 2.
+//   Python and Go do not count this way by default and must convert:
+//     Python: len(s.encode("utf-16-le")) // 2
+//     Go:     len(utf16.Encode([]rune(s)))
+//
+// REVISIONS
+//   A new document is at revision 0 (empty text). Every committed Operation
+//   increases the revision by exactly 1, so a (doc_id, revision) pair names
+//   one exact version of the text, identical on every replica.
+//
+// DETERMINISM (important for Raft)
+//   An Operation is what gets written to the replicated log. It must carry
+//   everything needed to apply it. The state machine applying it must never
+//   read the clock, use random numbers or call other services (such as the
+//   LLM), or replicas will diverge.
+
+// A half-open range [start, end) of a document.
+// An insertion point (cursor) is a range where start == end.
+message TextRange {
+  uint32 start = 1;
+  uint32 end = 2;
+}
+
+// Replace the text covered by `range` with `insert`.
+//   Insert "x" at 5:    range {start: 5, end: 5}, insert: "x"
+//   Delete 5..8:        range {start: 5, end: 8}, insert: ""
+//   Replace 5..8:       range {start: 5, end: 8}, insert: "new"
+message TextChange {
+  TextRange range = 1;
+  string insert = 2;
+}
+
+// Uniquely identifies one operation, so a retried operation is applied once.
+//
+// Each editor session picks a random client_id (e.g. a UUID) and numbers its
+// operations 1, 2, 3, ... in the order it sends them. The state machine keeps
+// the highest seq it has applied for each client_id and ignores any operation
+// at or below it. This makes resending after a timeout or leader failover safe.
+message OpId {
+  string client_id = 1;
+  uint64 seq = 2;
+}
+
+// One edit by one user. This is the entry that goes into the log
+// (a local list in Milestone 1, the Raft log in Milestone 2).
+message Operation {
+  OpId op_id = 1;
+  string doc_id = 2;
+
+  // The revision the client's text was at when the edit was made.
+  // The ranges in `changes` refer to that version of the document.
+  uint64 base_revision = 3;
+
+  // All ranges refer to the document at base_revision (not to the result of
+  // earlier changes in this list). They must be sorted by start and must not
+  // overlap. This matches how a CodeMirror ChangeSet describes an edit.
+  repeated TextChange changes = 4;
+
+  // Who made the edit, for attribution and history.
+  string user_id = 5;
+}
+
+// Points at an exact piece of text in an exact version of a document.
+// LLM suggestions carry one so the client can check whether that text has
+// changed since the suggestion was computed, and shift or discard it.
+message TextAnchor {
+  string doc_id = 1;
+  uint64 revision = 2;
+  TextRange range = 3;
+}
+
+// The full text of a document at one revision. Used to load a document,
+// as the basis for Raft snapshots, and as input to summarization.
+message DocumentSnapshot {
+  string doc_id = 1;
+  uint64 revision = 2;
+  string text = 3;
+}
